@@ -1,0 +1,96 @@
+# Azure Pipeline.
+variables:
+  - group: TFReady_env_group
+name: $(Date:yyyyMMdd).$(Rev:.r)
+trigger:
+ batch: true
+ branches:
+   include:
+   - master
+
+stages: 
+  - stage: dev
+    displayName: dev  
+    jobs: 
+    - job: init
+      pool:
+        vmImage: 'ubuntu-16.04' # Other options: 'macOS-10.13', 'vs2017-win2016'
+      steps:
+      - task: DownloadSecureFile@1
+        inputs:
+          secureFile: $(env).auto.tfvars
+      - script: terraform fmt -check=false
+        displayName: Check terraform is formatted correctly
+      - bash: ln -s $(Agent.TempDirectory)/$(env).auto.tfvars ./$(env).auto.tfvars 
+        displayName: place variables 
+      - task: AzureCLI@1
+        displayName: Init
+        inputs:
+          azureSubscription: $(srv_connection)
+          scriptLocation: 'scriptPath' # Options: inlineScript, scriptPath
+          scriptPath: ./init.sh
+          arguments: -e $(env) -c $(app_name) -r $(regions)
+      - task: PublishPipelineArtifact@1
+        inputs:
+          path: $(System.DefaultWorkingDirectory)/.terraform
+          artifactName: init
+      - bash: rm -rf ./$(env).auto.tfvars 
+        displayName: remove variables 
+    - job: plan
+      dependsOn: init
+      pool:
+        vmImage: 'ubuntu-16.04' # Other options: 'macOS-10.13', 'vs2017-win2016'
+      steps:
+      - task: DownloadSecureFile@1
+        inputs:
+          secureFile: $(env).auto.tfvars
+      - bash: mkdir .terraform
+        displayName: init landing location
+      - task: DownloadPipelineArtifact@2
+        inputs:
+          artifact: init
+          path: $(System.DefaultWorkingDirectory)/.terraform
+      - bash: ln -sf $(Agent.TempDirectory)/$(env).auto.tfvars ./$(env).auto.tfvars 
+        displayName: place variables 
+      - bash: chmod +x .terraform/plugins/linux_amd64/*.*
+        displayName: plugin permissions
+      - task: AzureCLI@1
+        displayName: Plan 
+        inputs:
+          azureSubscription:  $(srv_connection)
+          scriptLocation: 'scriptPath' # Options: inlineScript, scriptPath
+          scriptPath: ./plan.sh
+          arguments: -e $(env) -c $(app_name) -r $(regions) -p $(password)
+      - task: PublishPipelineArtifact@1
+        inputs:
+          path: $(System.DefaultWorkingDirectory)/$(env).plan
+          artifactName: plan
+    - job: apply
+      dependsOn: plan
+      pool:
+        vmImage: 'ubuntu-16.04' # Other options: 'macOS-10.13', 'vs2017-win2016'
+      steps:
+      - bash: mkdir .terraform
+        displayName: init landing location
+      - task: DownloadPipelineArtifact@2
+        inputs:
+          artifact: init
+          path: $(System.DefaultWorkingDirectory)/.terraform
+      - bash: chmod +x .terraform/plugins/linux_amd64/*.*
+        displayName: plugin permissions
+      - task: DownloadPipelineArtifact@2
+        inputs:
+          artifact: plan
+          path: $(System.DefaultWorkingDirectory)
+      - task: AzureCLI@1
+        displayName: Apply 
+        inputs:
+          azureSubscription:  $(srv_connection)
+          scriptLocation: 'scriptPath' # Options: inlineScript, scriptPath
+          scriptPath: ./apply.sh
+          arguments: -e $(env) 
+
+
+
+
+
